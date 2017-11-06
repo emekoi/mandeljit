@@ -1,20 +1,25 @@
 .gitignore
 
-CFLAGS += -c -g -Wall -Wextra --std=c99 -ansi -pedantic -Wno-implicit-fallthrough
+CFLAGS += -c -g -Wall -Wextra --std=c99 -ansi -pedantic
 CFLAGS += -fno-strict-aliasing -finline-functions -funroll-loops
 DYNASM = dynasm/dynasm.lua
 DFLAGS += -N
 LINK += -lm
+SUFFIX =
 
 ifeq (@(TUP_PLATFORM),win32)
-  DFLAGS += -D WIN32
+  DFLAGS += -D WIN
+  SUFFIX = .exe
+endif
+
+ifneq (@(TUP_PLATFORM),win32)
+  CFLAGS += -Wno-implicit-fallthrough
 endif
 
 ifeq (@(TUP_ARCH),x86_64)
-  DFLAGS += -D X64
+  #DFLAGS += -D X64
 endif
 
 : foreach *.dasc     |> luajit $(DYNASM) $(DFLAGS) -o %o %f |> %B.c
 : foreach *.c        |> gcc $(CFLAGS) %f -o %o |> ../bin/%B.o
-: foreach ../bin/*.o |> gcc %f -o %o $(LINK) |> ../bin/%B
-
+: foreach ../bin/*.o |> gcc %f $(LINK) -o %o |> ../bin/%B$(SUFFIX)

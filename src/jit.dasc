@@ -1,4 +1,4 @@
-|| #if ((defined(_M_X64) || defined(__amd64__)) != X64) || (defined(_WIN32) != WIN)
+||#if ((defined(_M_X64) || defined(__x86_64__) || defined(__amd64__)) != X64) || (defined(_WIN32) != WIN)
 #error "Wrong DynASM flags used: pass `-D X64` and/or `-D WIN` to dynasm.lua as appropriate"
 #endif
 
@@ -31,9 +31,6 @@ static void* link_and_encode(dasm_State** d) {
 #else
   mprotect(buf, sz, PROT_READ | PROT_EXEC);
 #endif
-  FILE *fp = fopen("jit.out", "wb");
-  fwrite(buf, sz, 1, fp);
-  fclose(fp);
   return buf;
 }
 
@@ -48,7 +45,7 @@ typedef struct bf_state {
 
 #define bad_program(s) exit(fprintf(stderr, "bad program near %.16s: %s\n", program, s))
 
-static void(* bf_compile(const char* program) )(bf_state_t*) {
+static void(*bf_compile(const char* program))(bf_state_t*) {
   unsigned loops[MAX_NESTING];
   unsigned npc = 8, nextpc = 0;
   int nloops = 0, n; dasm_State* d;
@@ -245,11 +242,13 @@ int main(int argc, char** argv) {
   if(argc == 2) {
     long sz;
     char* program;
+
     FILE* f = fopen(argv[1], "r");
     if(!f) {
       fprintf(stderr, "Cannot open %s\n", argv[1]);
       return 1;
     }
+
     fseek(f, 0, SEEK_END);
     sz = ftell(f);
     program = (char*)malloc(sz + 1);
@@ -257,6 +256,7 @@ int main(int argc, char** argv) {
     program[fread(program, 1, sz, f)] = 0;
     fclose(f);
     bf_run(program);
+    
     return 0;
   } else {
     fprintf(stderr, "Usage: %s INFILE.bf\n", argv[0]);
