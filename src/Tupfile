@@ -20,6 +20,6 @@ ifeq (@(TUP_ARCH),x86_64)
   #DFLAGS += -D X64
 endif
 
-: foreach *.dasc     |> luajit $(DYNASM) $(DFLAGS) -o %o %f |> %B.c
-: foreach *.c        |> gcc $(CFLAGS) %f -o %o |> ../bin/%B.o
+#: foreach *.dasc     |> luajit $(DYNASM) $(DFLAGS) -o %o %f |> %B.c
+#: foreach *.c        |> gcc $(CFLAGS) %f -o %o |> ../bin/%B.o
 : foreach ../bin/*.o |> gcc %f $(LINK) -o %o |> ../bin/%B$(SUFFIX)

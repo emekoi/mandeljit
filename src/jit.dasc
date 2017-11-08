@@ -16,6 +16,7 @@
 #endif
 
 #define UNUSED(x)  ((void) (x))
+#define sqr(x) ((x) * (x))
 
 static void* link_and_encode(dasm_State** d) {
   size_t sz; void* buf;
@@ -34,21 +35,11 @@ static void* link_and_encode(dasm_State** d) {
   return buf;
 }
 
-#define TAPE_SIZE 1024 * 1024
-#define MAX_NESTING 1024
+typedef struct { double r; double i; } complex;
 
-typedef struct bf_state {
-  unsigned char* tape;
-  unsigned char (*get_ch)(struct bf_state*);
-  void (*put_ch)(struct bf_state*, unsigned char);
-} bf_state_t;
-
-#define bad_program(s) exit(fprintf(stderr, "bad program near %.16s: %s\n", program, s))
-
-static void(*bf_compile(const char* program))(bf_state_t*) {
-  unsigned loops[MAX_NESTING];
-  unsigned npc = 8, nextpc = 0;
-  int nloops = 0, n; dasm_State* d;
+static void(*compile(char const *code))(complex *registers) {
+  complex *src, *dst;
+  dasm_State* d;
 
   |.if X64
     |.arch x64
@@ -58,208 +49,120 @@ static void(*bf_compile(const char* program))(bf_state_t*) {
 
   |.section code
   dasm_init(&d, DASM_MAXSECTION);
+
   |.globals lbl_
   void* labels[lbl__MAX];
   dasm_setupglobal(&d, labels, lbl__MAX);
-  |.actionlist bf_actions
-  dasm_setup(&d, bf_actions);
-  dasm_growpc(&d, npc);
+
+  |.actionlist actions
+  dasm_setup(&d, actions);
+
   |.if X64
-    |.define aPtr, rbx
-    |.define aState, r12
+    |.define aReg, r12
+
     |.if WIN
-      |.define aTapeBegin, rsi
-      |.define aTapeEnd, rdi
-      |.define rArg1, rcx
-      |.define rArg2, rdx
+      |.define aSrc, rsi
+      |.define aDst, rdi
     |.else
-      |.define aTapeBegin, r13
-      |.define aTapeEnd, r14
-      |.define rArg1, rdi
-      |.define rArg2, rsi
+      |.define aSrc, r13
+      |.define aDst, r14
     |.endif
-    |.macro prepcall1, arg1
-      | mov rArg1, arg1
-    |.endmacro
-    |.macro prepcall2, arg1, arg2
-      | mov rArg1, arg1
-      | mov rArg2, arg2
-    |.endmacro
-    |.define postcall, .nop
+
     |.macro prologue
-      | push aPtr
-      | push aState
-      | push aTapeBegin
-      | push aTapeEnd
+      | push aReg
+      | push aSrc
+      | push aDst
       | push rax
-      | mov aState, rArg1
     |.endmacro
+
     |.macro epilogue
       | pop rax
-      | pop aTapeEnd
-      | pop aTapeBegin
-      | pop aState
-      | pop aPtr
+      | pop aDst
+      | pop aSrc
+      | pop aReg
       | ret
     |.endmacro
+
   |.else
-    |.define aPtr, ebx
-    |.define aState, ebp
-    |.define aTapeBegin, esi
-    |.define aTapeEnd, edi
-    |.macro prepcall1, arg1
-      | push arg1
-    |.endmacro
-    |.macro prepcall2, arg1, arg2
-      | push arg2
-      | push arg1
-    |.endmacro
-    |.macro postcall, n
-      | add esp, 4*n
-    |.endmacro
+
+    |.define aReg, ebp
+    |.define aSrc, esi
+    |.define aDst, edi
+
     |.macro prologue
-      | push aPtr
-      | push aState
-      | push aTapeBegin
-      | push aTapeEnd
-      | mov aState, [esp+20]
+      | push aReg
+      | push aSrc
+      | push aDst
     |.endmacro
+
     |.macro epilogue
-      | pop aTapeEnd
-      | pop aTapeBegin
-      | pop aState
-      | pop aPtr
+      | pop aDst
+      | pop aSrc
+      | pop aReg
       | ret 4
     |.endmacro
   |.endif
 
-  |.type state, bf_state_t, aState
+  |.type src, complex, aSrc
+  |.type dst, complex, aDst
+  |.type registers, complex, aReg
 
   dasm_State** Dst = &d;
+
   |.code
-  |->bf_main:
+  |->main:
+  | mov aReg, registers
   | prologue
-  | mov aPtr, state->tape
-  | lea aTapeBegin, [aPtr-1]
-  | lea aTapeEnd, [aPtr+TAPE_SIZE-1]
-  for(;;) {
-    switch(*program++) {
-      case '<': {
-        for(n = 1; *program == '<'; ++n, ++program);
-        | sub aPtr, n%TAPE_SIZE
-        | cmp aPtr, aTapeBegin
-        | ja >1
-        | add aPtr, TAPE_SIZE
-        |1:
-        break;
-      } case '>': {
-        for(n = 1; *program == '>'; ++n, ++program);
-        | add aPtr, n%TAPE_SIZE
-        | cmp aPtr, aTapeEnd
-        | jbe >1
-        | sub aPtr, TAPE_SIZE
-        |1:
+
+  for(; *code; code += 3) {
+    switch(*code) {
+      | mov aDst, &aReg[code[2] - 'a']
+      | mov aSrc, &registers[code[1] - 'a']
+      case '=': {
+        | mov aDst, aSrc
         break;
       } case '+': {
-        for(n = 1; *program == '+'; ++n, ++program);
-        | add byte [aPtr], n
+        | mov r1, [ dst->r + src->r ]
+        | mov r2, [ dst->i + src->i ]
+        | mov dst->r, r1
+        | mov dst->i, r2
         break;
-      } case '-': {
-        for(n = 1; *program == '-'; ++n, ++program);
-        | sub byte [aPtr], n
-        break;
-      } case ',': {
-        | prepcall1 aState
-        | call aword state->get_ch
-        | postcall 1
-        | mov byte [aPtr], al
-        break;
-      } case '.': {
-        | movzx r0, byte [aPtr]
-        | prepcall2 aState, r0
-        | call aword state->put_ch
-        | postcall 2
-        break;
-      } case '[': {
-        if(nloops == MAX_NESTING)
-          bad_program("Nesting too deep");
-        if(program[0] == '-' && program[1] == ']') {
-          program += 2;
-          | xor eax, eax
-          | mov byte [aPtr], al
-        } else {
-          if(nextpc == npc) {
-            npc *= 2;
-            dasm_growpc(&d, npc);
-          }
-          | cmp byte [aPtr], 0
-          | jz =>nextpc+1
-          |=>nextpc:
-          loops[nloops++] = nextpc;
-          nextpc += 2;
-        }
-        break;
-      } case ']': {
-        if(nloops == 0)
-          bad_program("] without matching [");
-        --nloops;
-        | cmp byte [aPtr], 0
-        | jnz =>loops[nloops]
-        |=>loops[nloops]+1:
+      } case '*': {
+        | mov r1, [ dst->r * src->r - dst->i * src->i ]
+        | mov r2, [ dst->r * src->i + dst->i * src->r ]
+        | mov dst->r, r1
+        | mov dst->i, r2
         break;
       } case 0: {
-        if(nloops != 0)
-          program = "<EOF>", bad_program("[ without matching ]");
         | epilogue
         link_and_encode(&d);
         dasm_free(&d);
-        return (void(*)(bf_state_t*))labels[lbl_bf_main];
+        return (void(*)(complex*))labels[lbl_main];
       }
     }
   }
+  return NULL;
 }
 
-static void bf_putchar(bf_state_t* s, unsigned char c) {
-  UNUSED(s);
-  putchar((int)c);
-}
-
-static unsigned char bf_getchar(bf_state_t* s) {
-  UNUSED(s);
-  return (unsigned char)getchar();
-}
-
-static void bf_run(const char* program) {
-  bf_state_t state;
-  unsigned char tape[TAPE_SIZE] = {0};
-  state.tape = tape;
-  state.get_ch = bf_getchar;
-  state.put_ch = bf_putchar;
-  bf_compile(program)(&state);
+static void run(complex *registers, const char* code) {
+  compile(code)(registers);
 }
 
 int main(int argc, char** argv) {
-  if(argc == 2) {
-    long sz;
-    char* program;
-
-    FILE* f = fopen(argv[1], "r");
-    if(!f) {
-      fprintf(stderr, "Cannot open %s\n", argv[1]);
-      return 1;
+  complex registers[4];
+  int i, x, y;
+  char line[1600];
+  printf("P5\n%d %d\n%d\n", 1600, 900, 255);
+  for (y = 0; y < 900; ++y) {
+    for (x = 0; x < 1600; ++x) {
+      registers[0].r = 2 * 1.6 * (x / 1600.0 - 0.5);
+      registers[0].i = 2 * 0.9 * (y /  900.0 - 0.5);
+      for (i = 1; i < 4; ++i) registers[i].r = registers[i].i = 0;
+      for (i = 0; i < 256 && sqr(registers[1].r) + sqr(registers[1].i) < 4; ++i)
+        run(registers, argv[1]);
+      line[x] = i;
     }
-
-    fseek(f, 0, SEEK_END);
-    sz = ftell(f);
-    program = (char*)malloc(sz + 1);
-    fseek(f, 0, SEEK_SET);
-    program[fread(program, 1, sz, f)] = 0;
-    fclose(f);
-    bf_run(program);
-    
-    return 0;
-  } else {
-    fprintf(stderr, "Usage: %s INFILE.bf\n", argv[0]);
-    return 1;
+    fwrite(line, 1, sizeof(line), stdout);
   }
+  return 0;
 }
